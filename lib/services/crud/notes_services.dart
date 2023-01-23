@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/cupertino.dart';
 import 'package:sqflite/sqflite.dart';
 import 'package:path_provider/path_provider.dart';
@@ -7,10 +9,40 @@ import 'crud_exceptions.dart';
 class NotesService {
   Database? _db;
 
+  List<DatabaseNote> _notes = [];
+
+  static final NotesService _shared = NotesService._sharedInstance();
+  NotesService._sharedInstance();
+  factory NotesService() => _shared;
+
+  final _notesStreamController =
+      StreamController<List<DatabaseNote>>.broadcast();
+
+  Stream<List<DatabaseNote>> get allNotes => _notesStreamController.stream;
+
+  Future<DatabaseUser> getOrCreateUser({required String email}) async {
+    try {
+      final user = await getUser(email: email);
+      return user;
+    } on CoundNotFindUser {
+      final createdUser = await createUser(email: email);
+      return createdUser;
+    } catch (e) {
+      rethrow;
+    }
+  }
+
+  Future<void> _cacheNotes() async {
+    final allNotes = await getAllNotes();
+    _notes = allNotes.toList();
+    _notesStreamController.add(_notes);
+  }
+
   Future<DatabaseNote> updateNote({
     required DatabaseNote note,
     required String text,
   }) async {
+    await _ensureDbIsOpen();
     final db = _getDatabaseOrThrow();
 
     await getNote(id: note.id);
@@ -23,11 +55,16 @@ class NotesService {
     if (updateCount == 0) {
       throw CoundNotUpdateNote();
     } else {
-      return await getNote(id: note.id);
+      final updateNote = await getNote(id: note.id);
+      _notes.removeWhere((note) => updateNote.id == note.id);
+      _notes.add(updateNote);
+      _notesStreamController.add(_notes);
+      return updateNote;
     }
   }
 
-  Future<Iterable<DatabaseNote>> getAllNotes({required int id}) async {
+  Future<Iterable<DatabaseNote>> getAllNotes() async {
+    await _ensureDbIsOpen();
     final db = _getDatabaseOrThrow();
     final notes = await db.query(noteTable);
 
@@ -35,6 +72,7 @@ class NotesService {
   }
 
   Future<DatabaseNote> getNote({required int id}) async {
+    await _ensureDbIsOpen();
     final db = _getDatabaseOrThrow();
     final notes =
         await db.query(noteTable, limit: 1, where: 'id = ?', whereArgs: [id]);
@@ -42,26 +80,42 @@ class NotesService {
     if (notes.isEmpty) {
       throw CoundNotFindNote();
     } else {
-      return DatabaseNote.fromRow(notes.first);
+      final note = DatabaseNote.fromRow(notes.first);
+      _notes.removeWhere((note) => note.id == id);
+      _notes.add(note);
+      _notesStreamController.add(_notes);
+      return note;
     }
   }
 
   Future<int> deleteAllNotes() async {
+    await _ensureDbIsOpen();
     final db = _getDatabaseOrThrow();
-    return await db.delete(noteTable);
+
+    final numberOfDeletions = await db.delete(noteTable);
+
+    _notes = [];
+    _notesStreamController.add(_notes);
+
+    return numberOfDeletions;
   }
 
   Future<void> deleteNote({required String id}) async {
+    await _ensureDbIsOpen();
     final db = _getDatabaseOrThrow();
     final deleteCount =
         await db.delete(noteTable, where: 'id = ?', whereArgs: [id]);
 
-    if (deleteCount != 1) {
+    if (deleteCount == 0) {
       throw CouldNotDeleteNote();
+    } else {
+      _notes.removeWhere((note) => note.id == id);
+      _notesStreamController.add(_notes);
     }
   }
 
   Future<DatabaseNote> createNote({required DatabaseUser owner}) async {
+    await _ensureDbIsOpen();
     final db = _getDatabaseOrThrow();
 
     // make sure owner exists in the database with the correct id
@@ -78,10 +132,14 @@ class NotesService {
     final note = DatabaseNote(
         id: noteId, userId: owner.id, text: text, isSyncedWithCloud: true);
 
+    _notes.add(note);
+    _notesStreamController.add(_notes);
+
     return note;
   }
 
   Future<DatabaseUser> getUser({required String email}) async {
+    await _ensureDbIsOpen();
     final db = _getDatabaseOrThrow();
 
     final results = await db.query(userTable,
@@ -95,6 +153,7 @@ class NotesService {
   }
 
   Future<DatabaseUser> createUser({required String email}) async {
+    await _ensureDbIsOpen();
     final db = _getDatabaseOrThrow();
     final results = await db.query(userTable,
         limit: 1, where: 'email = ?', whereArgs: [email.toLowerCase()]);
@@ -111,6 +170,7 @@ class NotesService {
   }
 
   Future<void> deleteUSer({required String email}) async {
+    await _ensureDbIsOpen();
     final db = _getDatabaseOrThrow();
     final deleteCount = await db.delete(userTable,
         where: 'email = ?', whereArgs: [email.toLowerCase()]);
@@ -126,6 +186,14 @@ class NotesService {
       throw DatabaseIsNotOpen();
     } else {
       return db;
+    }
+  }
+
+  Future<void> _ensureDbIsOpen() async {
+    try {
+      await open();
+    } on DatabaseIsNotOpen {
+      // empty
     }
   }
 
@@ -151,6 +219,7 @@ class NotesService {
 
       db.execute(createUserTable);
       db.execute(createNotesTable);
+      await _cacheNotes();
     } on MissingPlatformDirectoryException {
       throw UnableToGetDocumentsDirectory();
     }
@@ -217,21 +286,23 @@ const isSyncesWithCloudColumn = "is_synced_with_cloud";
 
 // This code is sql for create note table
 const createNotesTable = '''
-      CREATE TABLE "note" (
-        "id"	INTEGER NOT NULL,
-        "user_id"	INTEGER NOT NULL,
-        "text"	TEXT,
-        "is_synced_with_cloud"	INTEGER DEFAULT 0,
-        FOREIGN KEY("user_id") REFERENCES "user"("id"),
-        PRIMARY KEY("id" AUTOINCREMENT)
-      );
+CREATE TABLE IF NOT EXISTS "note" (
+	"id"	INTEGER NOT NULL,
+	"user_id"	INTEGER NOT NULL,
+	"text"	TEXT,
+	"is_synced_with_cloud"	INTEGER DEFAULT 0,
+	FOREIGN KEY("user_id") REFERENCES "user"("id"),
+	PRIMARY KEY("id" AUTOINCREMENT)
+)
+
       ''';
 
 // This code is sql for create user table
 const createUserTable = '''
-        CREATE TABLE "user" (
-          "id"	INTEGER NOT NULL,
-          "email"	TEXT NOT NULL UNIQUE,
-          PRIMARY KEY("id" AUTOINCREMENT)
-        );
+CREATE TABLE IF NOT EXISTS "user" (
+	"id"	INTEGER NOT NULL,
+	"email"	TEXT NOT NULL UNIQUE,
+	PRIMARY KEY("id" AUTOINCREMENT)
+)
+
         ''';
