@@ -21,7 +21,6 @@ class NotesService {
       },
     );
   }
-
   factory NotesService() => _shared;
 
   late final StreamController<List<DatabaseNote>> _notesStreamController;

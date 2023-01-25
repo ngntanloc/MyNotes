@@ -5,7 +5,6 @@ import 'package:mynotes/services/crud/notes_services.dart';
 import 'package:mynotes/utilities/dialogs/logout_dialog.dart';
 import 'package:mynotes/views/notes/notes_list_view.dart';
 import '../../enums/menu_actions.dart';
-import '../../main.dart';
 
 class NotesView extends StatefulWidget {
   const NotesView({super.key});
@@ -16,7 +15,7 @@ class NotesView extends StatefulWidget {
 
 class _NotesViewState extends State<NotesView> {
   late final NotesService _notesService;
-  String get userEmail => AuthService.firebase().currentUser!.email!;
+  String get userEmail => AuthService.firebase().currentUser!.email;
 
   @override
   void initState() {
