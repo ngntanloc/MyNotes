@@ -15,3 +15,5 @@ class CoundNotFindUser implements Exception {}
 class CoundNotFindNote implements Exception {}
 
 class CoundNotUpdateNote implements Exception {}
+
+class UserShouldBeSetBeforeReadingAllNotes implements Exception {}
